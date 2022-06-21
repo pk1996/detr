@@ -1,3 +1,14 @@
+Updates =>
+1. Added support for KITTI 2d object detection training.
+2. To train on KITTI over a trained DeTR model - 
+```
+# Download pretrained DeTR from model zoo and save in folder pretrained
+
+python -m torch.distributed.launch --nproc_per_node =8 --use_env main.py --dataset_file kitti --kitti_path '/srip-vol/datasets/KITTI3D/' --resume pretrained/detr-r101-dc5-a2e86def.pth 
+```
+3. 
+
+
 **DE⫶TR**: End-to-End Object Detection with Transformers
 ========
 

@@ -27,6 +27,7 @@ def get_args_parser():
     parser.add_argument('--lr_drop', default=200, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
+    parser.add_argument('--num_classes', default=90, type=int, help = "max class id. Refer comment at end of detr.py")
 
     # Model parameters
     parser.add_argument('--frozen_weights', type=str, default=None,
@@ -81,7 +82,9 @@ def get_args_parser():
     # dataset parameters
     parser.add_argument('--dataset_file', default='coco')
     parser.add_argument('--coco_path', type=str)
+    parser.add_argument('--kitti_path', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
+    # TODO - for depth??
     parser.add_argument('--remove_difficult', action='store_true')
 
     parser.add_argument('--output_dir', default='',
@@ -174,8 +177,13 @@ def main(args):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.resume, map_location='cpu', check_hash=True)
         else:
+            print('loading pretrianed weights.....')
             checkpoint = torch.load(args.resume, map_location='cpu')
-        model_without_ddp.load_state_dict(checkpoint['model'])
+        # Remove class weights
+        del checkpoint["model"]["class_embed.weight"]
+        del checkpoint["model"]["class_embed.bias"]
+
+        model_without_ddp.load_state_dict(checkpoint['model'], strict = False)
         if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])

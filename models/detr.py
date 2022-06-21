@@ -58,6 +58,7 @@ class DETR(nn.Module):
         """
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
+        # features and positional embedding
         features, pos = self.backbone(samples)
 
         src, mask = features[-1].decompose()
@@ -66,6 +67,8 @@ class DETR(nn.Module):
 
         outputs_class = self.class_embed(hs)
         outputs_coord = self.bbox_embed(hs).sigmoid()
+        # TODO - Add a MLP here to predict depth for each query
+
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
@@ -310,7 +313,7 @@ def build(args):
     # you should pass `num_classes` to be 2 (max_obj_id + 1).
     # For more details on this, check the following discussion
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
-    num_classes = 20 if args.dataset_file != 'coco' else 91
+    num_classes = args.num_classes+1 if args.dataset_file != 'coco' else 91
     if args.dataset_file == "coco_panoptic":
         # for panoptic, we just add a num_classes that is large enough to hold
         # max_obj_id + 1, but the exact value doesn't really matter
