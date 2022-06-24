@@ -65,6 +65,8 @@ class DETR(nn.Module):
         assert mask is not None
         hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
 
+        # TODO - Params from here need to be trained on KITTI data. Should not 
+        # load DeTR weights.
         outputs_class = self.class_embed(hs)
         outputs_coord = self.bbox_embed(hs).sigmoid()
         # TODO - Add a MLP here to predict depth for each query

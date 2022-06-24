@@ -27,7 +27,7 @@ def get_args_parser():
     parser.add_argument('--lr_drop', default=200, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
-    parser.add_argument('--num_classes', default=90, type=int, help = "max class id. Refer comment at end of detr.py")
+    parser.add_argument('--num_classes', default=3, type=int, help = "max class id. Refer comment at end of detr.py")
 
     # Model parameters
     parser.add_argument('--frozen_weights', type=str, default=None,
@@ -80,19 +80,19 @@ def get_args_parser():
                         help="Relative classification weight of the no-object class")
 
     # dataset parameters
-    parser.add_argument('--dataset_file', default='coco')
+    parser.add_argument('--dataset_file', default='kitti_coco') # kitti
     parser.add_argument('--coco_path', type=str)
-    parser.add_argument('--kitti_path', type=str)
+    parser.add_argument('--kitti_path', default='/srip-vol/datasets/KITTI3D/', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
     # TODO - for depth??
     parser.add_argument('--remove_difficult', action='store_true')
 
-    parser.add_argument('--output_dir', default='',
+    parser.add_argument('--output_dir', default='output_logs_KITTI_2d',
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
     parser.add_argument('--seed', default=42, type=int)
-    parser.add_argument('--resume', default='', help='resume from checkpoint')
+    parser.add_argument('--resume', default='pretrained/detr-r101-dc5-a2e86def.pth', help='resume from checkpoint')
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true')

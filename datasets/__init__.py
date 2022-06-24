@@ -3,6 +3,7 @@ import torch.utils.data
 import torchvision
 
 from .coco import build as build_coco
+from .coco import build_kitti_coco
 from .kitti import build as build_kitti
 
 
@@ -19,6 +20,10 @@ def get_coco_api_from_dataset(dataset):
 def build_dataset(image_set, args):
     if args.dataset_file == 'coco':
         return build_coco(image_set, args)
+
+    if args.dataset_file == 'kitti_coco':
+        return build_kitti_coco(image_set, args)
+
     if args.dataset_file == 'kitti':
         return build_kitti(image_set, args)
     if args.dataset_file == 'coco_panoptic':
