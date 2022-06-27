@@ -87,7 +87,7 @@ def get_args_parser():
     # TODO - for depth??
     parser.add_argument('--remove_difficult', action='store_true')
 
-    parser.add_argument('--output_dir', default='output_logs_KITTI_2d',
+    parser.add_argument('--output_dir', default='output_logs',
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
@@ -112,7 +112,8 @@ def main(args):
     if args.frozen_weights is not None:
         assert args.masks, "Frozen training is meant for segmentation only"
     print(args)
-
+    
+    args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device(args.device)
 
     # fix the seed for reproducibility

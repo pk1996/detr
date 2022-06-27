@@ -19,7 +19,9 @@ def decode(label):
      ymin = float(data[5])
      xmax = float(data[6])
      ymax = float(data[7])
-
+     
+     # top left cornet and dimensions
+     # Refer - https://cocodataset.org/#format-data
      bbox = [xmin, ymin, ceil(xmax-xmin), ceil(ymax-ymin)]
      class_id = KITTI_CLASS.get(class_name, -1)
 

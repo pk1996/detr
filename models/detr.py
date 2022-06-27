@@ -40,11 +40,14 @@ class DETR(nn.Module):
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
+        # To regress 
+        self.depth_embed = nn.Linear(hidden_dim, 1)
+
 
     def forward(self, samples: NestedTensor):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
-               - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
+               - samples.mask: a binary mask of shanum_classpe [batch_size x H x W], containing 1 on padded pixels
 
             It returns a dict with the following elements:
                - "pred_logits": the classification logits (including no-object) for all queries.
@@ -64,25 +67,25 @@ class DETR(nn.Module):
         src, mask = features[-1].decompose()
         assert mask is not None
         hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
-
         # TODO - Params from here need to be trained on KITTI data. Should not 
         # load DeTR weights.
         outputs_class = self.class_embed(hs)
         outputs_coord = self.bbox_embed(hs).sigmoid()
+        output_depth = self.depth_embed(hs)
         # TODO - Add a MLP here to predict depth for each query
 
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
+        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'pred_depth': output_depth[-1]}
         if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord, output_depth)
         return out
 
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_coord):
+    def _set_aux_loss(self, outputs_class, outputs_coord, output_depth):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
-        return [{'pred_logits': a, 'pred_boxes': b}
-                for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
+        return [{'pred_logits': a, 'pred_boxes': b, 'pred_depth': c}
+                for a, b, c in zip(outputs_class[:-1], outputs_coord[:-1], output_depth[:-1])]
 
 
 class SetCriterion(nn.Module):
@@ -195,6 +198,22 @@ class SetCriterion(nn.Module):
         }
         return losses
 
+    def loss_depth(self, outputs, targets, indices, num_boxes):
+        """Classification loss (NLL)
+        targets dicts must contain the key "depth" containing a tensor of dim [nb_target_boxes]
+        """
+        assert 'pred_depth' in outputs
+        idx = self._get_src_permutation_idx(indices)
+        src_depth = outputs['pred_depth'][idx].squeeze()
+        target_depth = torch.cat([t['depth'][i] for t, (_, i) in zip(targets, indices)])
+
+        # src_depth = outputs['pred_depth']
+        # TODO - Create a torch tensor of dim 2x100x1 where non assigned depths are 0? and others are gt as labels
+        # target_depth = src_depth # TODO
+        loss = F.mse_loss(src_depth, target_depth)
+        losses = {'loss_depth' : loss}
+        return losses
+
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
         batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
@@ -212,7 +231,8 @@ class SetCriterion(nn.Module):
             'labels': self.loss_labels,
             'cardinality': self.loss_cardinality,
             'boxes': self.loss_boxes,
-            'masks': self.loss_masks
+            'masks': self.loss_masks,
+            'depth': self.loss_depth
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
@@ -348,7 +368,7 @@ def build(args):
             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
         weight_dict.update(aux_weight_dict)
 
-    losses = ['labels', 'boxes', 'cardinality']
+    losses = ['labels', 'boxes', 'cardinality', 'depth']
     if args.masks:
         losses += ["masks"]
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
