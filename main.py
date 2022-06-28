@@ -87,7 +87,7 @@ def get_args_parser():
     # TODO - for depth??
     parser.add_argument('--remove_difficult', action='store_true')
 
-    parser.add_argument('--output_dir', default='output_logs',
+    parser.add_argument('--output_dir', default='output_logs_KITTI_2d_depth',
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
