@@ -76,6 +76,7 @@ def get_args_parser():
     parser.add_argument('--dice_loss_coef', default=1, type=float)
     parser.add_argument('--bbox_loss_coef', default=5, type=float)
     parser.add_argument('--giou_loss_coef', default=2, type=float)
+    parser.add_argument('--depth_loss_coef', default=1, type=float)
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
 
@@ -87,8 +88,10 @@ def get_args_parser():
     # TODO - for depth??
     parser.add_argument('--remove_difficult', action='store_true')
 
-    parser.add_argument('--output_dir', default='output_logs_KITTI_2d_depth',
+    parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
+    # parser.add_argument('--output_dir', default='output_logs_KITTI_2d_depth',
+    #                 help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
     parser.add_argument('--seed', default=42, type=int)

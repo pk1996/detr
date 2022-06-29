@@ -206,10 +206,6 @@ class SetCriterion(nn.Module):
         idx = self._get_src_permutation_idx(indices)
         src_depth = outputs['pred_depth'][idx].squeeze()
         target_depth = torch.cat([t['depth'][i] for t, (_, i) in zip(targets, indices)])
-
-        # src_depth = outputs['pred_depth']
-        # TODO - Create a torch tensor of dim 2x100x1 where non assigned depths are 0? and others are gt as labels
-        # target_depth = src_depth # TODO
         loss = F.mse_loss(src_depth, target_depth)
         losses = {'loss_depth' : loss}
         return losses
@@ -358,6 +354,7 @@ def build(args):
     matcher = build_matcher(args)
     weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
+    weight_dict['loss_depth'] = args.depth_loss_coef
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
         weight_dict["loss_dice"] = args.dice_loss_coef
