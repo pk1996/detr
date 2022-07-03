@@ -20,7 +20,7 @@ from models import build_model
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
     parser.add_argument('--lr', default=1e-4, type=float)
-    parser.add_argument('--lr_backbone', default=1e-5, type=float)
+    parser.add_argument('--lr_backbone', default=0, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
     parser.add_argument('--epochs', default=300, type=int)
@@ -32,6 +32,9 @@ def get_args_parser():
     # Model parameters
     parser.add_argument('--frozen_weights', type=str, default=None,
                         help="Path to the pretrained model. If set, only the mask head will be trained")
+    parser.add_argument('--depth_regression', action='store_false',
+                        help="Add flag to regress depth directly else use multi bin approach")
+
     # * Backbone
     parser.add_argument('--backbone', default='resnet50', type=str,
                         help="Name of the convolutional backbone to use")
@@ -88,14 +91,15 @@ def get_args_parser():
     # TODO - for depth??
     parser.add_argument('--remove_difficult', action='store_true')
 
-    parser.add_argument('--output_dir', default='',
-                        help='path where to save, empty for no saving')
-    # parser.add_argument('--output_dir', default='output_logs_KITTI_2d_depth',
-    #                 help='path where to save, empty for no saving')
+    # parser.add_argument('--output_dir', default='',
+    #                     help='path where to save, empty for no saving')
+    parser.add_argument('--output_dir', default='output_logs_KITTI_2d_depth_July1',
+                    help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--resume', default='pretrained/detr-r101-dc5-a2e86def.pth', help='resume from checkpoint')
+    # parser.add_argument('--resume', default='/srip-vol/parth/detr/output_logs_KITTI_2d_depth_1/checkpoint.pth', help='resume from checkpoint')
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true')
@@ -186,6 +190,9 @@ def main(args):
         # Remove class weights
         del checkpoint["model"]["class_embed.weight"]
         del checkpoint["model"]["class_embed.bias"]
+        # Remove box weights
+        del checkpoint["model"]["bbox_embed.weight"]
+        del checkpoint["model"]["bbox_embed.bias"]
 
         model_without_ddp.load_state_dict(checkpoint['model'], strict = False)
         if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:

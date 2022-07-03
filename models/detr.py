@@ -20,7 +20,7 @@ from .transformer import build_transformer
 
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbone, transformer, num_classes, num_queries, aux_loss=False):
+    def __init__(self, backbone, transformer, num_classes, num_queries, aux_loss=False, multi_bin = True, n_depth_bins = 10):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -40,14 +40,22 @@ class DETR(nn.Module):
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
-        # To regress 
-        self.depth_embed = nn.Linear(hidden_dim, 1)
+        self.multi_bin = multi_bin
+        if self.multi_bin:
+            # depth predicted as => d_bin_id* bin_width + bin_width/2 + correction
+            # -bin_width/2 <= correction < bin_width/2
+            self.n_depth_bins = n_depth_bins # TODO - To pass as argumemnt
+            self.depth_delta =  nn.Linear(hidden_dim, 1) # regression for finding delta
+            self.depth_bin = nn.Linear(hidden_dim, self.n_depth_dims)
+        else
+            # To regress 
+            self.depth_embed = nn.Linear(hidden_dim, 1)
 
 
     def forward(self, samples: NestedTensor):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
-               - samples.mask: a binary mask of shanum_classpe [batch_size x H x W], containing 1 on padded pixels
+               - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
 
             It returns a dict with the following elements:
                - "pred_logits": the classification logits (including no-object) for all queries.
@@ -71,12 +79,19 @@ class DETR(nn.Module):
         # load DeTR weights.
         outputs_class = self.class_embed(hs)
         outputs_coord = self.bbox_embed(hs).sigmoid()
-        output_depth = self.depth_embed(hs)
-        # TODO - Add a MLP here to predict depth for each query
-
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'pred_depth': output_depth[-1]}
-        if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord, output_depth)
+        if self.multi_bin:
+            # Assume hs -> DxBx(num_bins)
+            output_depth_bin = F.softmax(self.depth_bin(hs), dim = 2)
+            output_depth_delta = F.tanh(self.depth_delta(hs))/2
+            out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'pred_depth_bin': output_depth_bin[-1], 'pred_depth_delta': output_depth_delta[-1]}
+            if self.aux_loss:
+                out['aux_outputs'] = [{'pred_logits': a, 'pred_boxes': b, 'pred_depth': c}
+                    for a, b, c, d in zip(outputs_class[:-1], outputs_coord[:-1], output_depth_bin[:-1], output_depth_delta[:-1])]
+        else:
+            output_depth = self.depth_embed(hs)
+            out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'pred_depth': output_depth[-1]}
+            if self.aux_loss:
+                out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord, output_depth)
         return out
 
     @torch.jit.unused
@@ -94,7 +109,7 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
-    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses):
+    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses, multi_bin, n_depth_bins = None, depth_bin_res = None):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -112,6 +127,9 @@ class SetCriterion(nn.Module):
         empty_weight = torch.ones(self.num_classes + 1)
         empty_weight[-1] = self.eos_coef
         self.register_buffer('empty_weight', empty_weight)
+        self.multi_bin = multi_bin
+        self.n_depth_bins = n_depth_bins
+        self.depth_bin_res = depth_bin_res
 
     def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
         """Classification loss (NLL)
@@ -198,10 +216,30 @@ class SetCriterion(nn.Module):
         }
         return losses
 
+    def loss_depth_multi_bin(self, outputs, targets, indices, num_boxes):
+        """Classification loss (NLL)
+        targets dicts must contain the key "depth" containing a tensor of dim [nb_target_boxes]
+        """
+        assert 'pred_depth_bin' in outputs
+        assert 'pred_depth_delta' in outputs
+        idx = self._get_src_permutation_idx(indices)
+        src_depth = outputs['pred_depth'][idx].squeeze()
+        src_depth_bin = src_depth/self.depth_bin_res
+        src_depth_delta = src_depth - src_depth_bin*self.depth_bin_res + self.depth_bin_res/2
+        target_depth_bin = torch.cat([t['pred_depth_bin'][i] for t, (_, i) in zip(targets, indices)])
+        target_depth_delta = torch.cat([t['pred_depth_delta'][i] for t, (_, i) in zip(targets, indices)])
+        loss_depth_reg = F.mse_loss(src_depth_delta, target_depth_delta)
+        loss_depth_class = F.binary_cross_entropy(src_depth_bin, target_depth_bin)
+        # TODO - confirm the formula
+        loss = loss_depth_reg/2 + loss_depth_class/2
+        losses = {'loss_depth' : loss}
+        return losses
+
     def loss_depth(self, outputs, targets, indices, num_boxes):
         """Classification loss (NLL)
         targets dicts must contain the key "depth" containing a tensor of dim [nb_target_boxes]
         """
+        # TODO - check logic!!
         assert 'pred_depth' in outputs
         idx = self._get_src_permutation_idx(indices)
         src_depth = outputs['pred_depth'][idx].squeeze()
@@ -223,13 +261,22 @@ class SetCriterion(nn.Module):
         return batch_idx, tgt_idx
 
     def get_loss(self, loss, outputs, targets, indices, num_boxes, **kwargs):
-        loss_map = {
-            'labels': self.loss_labels,
-            'cardinality': self.loss_cardinality,
-            'boxes': self.loss_boxes,
-            'masks': self.loss_masks,
-            'depth': self.loss_depth
-        }
+        if self.multi_bin:
+            loss_map = {
+                'labels': self.loss_labels,
+                'cardinality': self.loss_cardinality,
+                'boxes': self.loss_boxes,
+                'masks': self.loss_masks,
+                'depth': self.loss_depth
+            }
+        else:
+            loss_map = {
+                'labels': self.loss_labels,
+                'cardinality': self.loss_cardinality,
+                'boxes': self.loss_boxes,
+                'masks': self.loss_masks,
+                'depth': self.loss_depth_multi_bin
+            }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
 
@@ -342,12 +389,26 @@ def build(args):
 
     transformer = build_transformer(args)
 
+    n_depth_bins = None
+    if ~args.depth_regression:
+        '''
+        KITTI statistics =>
+        max depth in train - 86m
+        max depth in val   - 83m
+        bin_res = 10m
+        n_depth_bins = 9
+        '''
+        n_depth_bins = 9 # TODO - get from args
+        depth_bin_res = 10 # TODO - get from args
+
     model = DETR(
         backbone,
         transformer,
         num_classes=num_classes,
         num_queries=args.num_queries,
         aux_loss=args.aux_loss,
+        multi_bin = ~args.depth_regression,
+        n_depth_bins = n_depth_bins
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
@@ -369,7 +430,7 @@ def build(args):
     if args.masks:
         losses += ["masks"]
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
-                             eos_coef=args.eos_coef, losses=losses)
+                             eos_coef=args.eos_coef, losses=losses, multi_bin = ~args.depth_regression, n_depth_bins = n_depth_bins)
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}
     if args.masks:
