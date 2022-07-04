@@ -20,6 +20,7 @@ from models import build_model
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
     parser.add_argument('--lr', default=1e-4, type=float)
+    # Set to 0 for no training the backbone (see line 114 backbone.py)
     parser.add_argument('--lr_backbone', default=0, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
@@ -91,10 +92,10 @@ def get_args_parser():
     # TODO - for depth??
     parser.add_argument('--remove_difficult', action='store_true')
 
-    # parser.add_argument('--output_dir', default='',
-    #                     help='path where to save, empty for no saving')
-    parser.add_argument('--output_dir', default='output_logs_KITTI_2d_depth_July1',
-                    help='path where to save, empty for no saving')
+    parser.add_argument('--output_dir', default='output_logs_local',
+                        help='path where to save, empty for no saving')
+    # parser.add_argument('--output_dir', default='output_logs_KITTI_2d_depth_July1',
+    #                 help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
     parser.add_argument('--seed', default=42, type=int)
@@ -191,8 +192,14 @@ def main(args):
         del checkpoint["model"]["class_embed.weight"]
         del checkpoint["model"]["class_embed.bias"]
         # Remove box weights
-        del checkpoint["model"]["bbox_embed.weight"]
-        del checkpoint["model"]["bbox_embed.bias"]
+        keys_to_delete = []
+        for key in checkpoint["model"]:
+            if 'box_embed' in key:
+                print(key)
+                keys_to_delete.append(key)
+
+        for key in keys_to_delete:
+            del checkpoint["model"][key]
 
         model_without_ddp.load_state_dict(checkpoint['model'], strict = False)
         if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:

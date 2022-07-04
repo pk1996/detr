@@ -46,8 +46,8 @@ class DETR(nn.Module):
             # -bin_width/2 <= correction < bin_width/2
             self.n_depth_bins = n_depth_bins # TODO - To pass as argumemnt
             self.depth_delta =  nn.Linear(hidden_dim, 1) # regression for finding delta
-            self.depth_bin = nn.Linear(hidden_dim, self.n_depth_dims)
-        else
+            self.depth_bin = nn.Linear(hidden_dim, self.n_depth_bins)
+        else:
             # To regress 
             self.depth_embed = nn.Linear(hidden_dim, 1)
 
@@ -81,11 +81,11 @@ class DETR(nn.Module):
         outputs_coord = self.bbox_embed(hs).sigmoid()
         if self.multi_bin:
             # Assume hs -> DxBx(num_bins)
-            output_depth_bin = F.softmax(self.depth_bin(hs), dim = 2)
+            output_depth_bin = F.softmax(self.depth_bin(hs), dim = 3)
             output_depth_delta = F.tanh(self.depth_delta(hs))/2
             out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'pred_depth_bin': output_depth_bin[-1], 'pred_depth_delta': output_depth_delta[-1]}
             if self.aux_loss:
-                out['aux_outputs'] = [{'pred_logits': a, 'pred_boxes': b, 'pred_depth': c}
+                out['aux_outputs'] = [{'pred_logits': a, 'pred_boxes': b, 'pred_depth_bin': c, 'pred_depth_delta': d}
                     for a, b, c, d in zip(outputs_class[:-1], outputs_coord[:-1], output_depth_bin[:-1], output_depth_delta[:-1])]
         else:
             output_depth = self.depth_embed(hs)
@@ -223,13 +223,19 @@ class SetCriterion(nn.Module):
         assert 'pred_depth_bin' in outputs
         assert 'pred_depth_delta' in outputs
         idx = self._get_src_permutation_idx(indices)
-        src_depth = outputs['pred_depth'][idx].squeeze()
-        src_depth_bin = src_depth/self.depth_bin_res
-        src_depth_delta = src_depth - src_depth_bin*self.depth_bin_res + self.depth_bin_res/2
-        target_depth_bin = torch.cat([t['pred_depth_bin'][i] for t, (_, i) in zip(targets, indices)])
-        target_depth_delta = torch.cat([t['pred_depth_delta'][i] for t, (_, i) in zip(targets, indices)])
+        
+        src_depth_bin = outputs['pred_depth_bin'][idx].squeeze()
+        src_depth_delta = outputs['pred_depth_delta'][idx].squeeze()
+
+        target_depth = torch.cat([t['depth'][i] for t, (_, i) in zip(targets, indices)])
+        target_depth_bin_cls = target_depth/self.depth_bin_res
+        target_depth_bin_cls = target_depth_bin_cls.int()
+        target_depth_delta = target_depth - target_depth_bin_cls*self.depth_bin_res - self.depth_bin_res/2
+        target_depth_bin = torch.zeros_like(src_depth_bin)
+        target_depth_bin[torch.arange(src_depth_bin.size()[0]),target_depth_bin_cls.long()] = 1
+        
         loss_depth_reg = F.mse_loss(src_depth_delta, target_depth_delta)
-        loss_depth_class = F.binary_cross_entropy(src_depth_bin, target_depth_bin)
+        loss_depth_class = F.cross_entropy(src_depth_bin, target_depth_bin)
         # TODO - confirm the formula
         loss = loss_depth_reg/2 + loss_depth_class/2
         losses = {'loss_depth' : loss}
@@ -429,8 +435,10 @@ def build(args):
     losses = ['labels', 'boxes', 'cardinality', 'depth']
     if args.masks:
         losses += ["masks"]
+    # self, num_classes, matcher, weight_dict, eos_coef, losses, multi_bin, n_depth_bins = None, depth_bin_res = None
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
-                             eos_coef=args.eos_coef, losses=losses, multi_bin = ~args.depth_regression, n_depth_bins = n_depth_bins)
+                             eos_coef=args.eos_coef, losses=losses, multi_bin = not args.depth_regression,
+                             n_depth_bins = n_depth_bins, depth_bin_res = depth_bin_res)
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}
     if args.masks:
