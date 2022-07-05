@@ -42,12 +42,14 @@ class DETR(nn.Module):
         self.aux_loss = aux_loss
         self.multi_bin = multi_bin
         if self.multi_bin:
+            print('Depth predicted by multi-bin approach')
             # depth predicted as => d_bin_id* bin_width + bin_width/2 + correction
             # -bin_width/2 <= correction < bin_width/2
-            self.n_depth_bins = n_depth_bins # TODO - To pass as argumemnt
+            self.n_depth_bins = n_depth_bins
             self.depth_delta =  nn.Linear(hidden_dim, 1) # regression for finding delta
             self.depth_bin = nn.Linear(hidden_dim, self.n_depth_bins)
         else:
+            print('Depth predicted by direct regression')
             # To regress 
             self.depth_embed = nn.Linear(hidden_dim, 1)
 
@@ -75,14 +77,11 @@ class DETR(nn.Module):
         src, mask = features[-1].decompose()
         assert mask is not None
         hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
-        # TODO - Params from here need to be trained on KITTI data. Should not 
-        # load DeTR weights.
         outputs_class = self.class_embed(hs)
         outputs_coord = self.bbox_embed(hs).sigmoid()
         if self.multi_bin:
-            # Assume hs -> DxBx(num_bins)
             output_depth_bin = F.softmax(self.depth_bin(hs), dim = 3)
-            output_depth_delta = F.tanh(self.depth_delta(hs))/2
+            output_depth_delta = torch.tanh(self.depth_delta(hs))/2
             out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'pred_depth_bin': output_depth_bin[-1], 'pred_depth_delta': output_depth_delta[-1]}
             if self.aux_loss:
                 out['aux_outputs'] = [{'pred_logits': a, 'pred_boxes': b, 'pred_depth_bin': c, 'pred_depth_delta': d}
@@ -273,7 +272,7 @@ class SetCriterion(nn.Module):
                 'cardinality': self.loss_cardinality,
                 'boxes': self.loss_boxes,
                 'masks': self.loss_masks,
-                'depth': self.loss_depth
+                'depth': self.loss_depth_multi_bin
             }
         else:
             loss_map = {
@@ -281,7 +280,7 @@ class SetCriterion(nn.Module):
                 'cardinality': self.loss_cardinality,
                 'boxes': self.loss_boxes,
                 'masks': self.loss_masks,
-                'depth': self.loss_depth_multi_bin
+                'depth': self.loss_depth            
             }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
@@ -396,7 +395,8 @@ def build(args):
     transformer = build_transformer(args)
 
     n_depth_bins = None
-    if ~args.depth_regression:
+    depth_bin_res = None
+    if not args.depth_regression:
         '''
         KITTI statistics =>
         max depth in train - 86m
@@ -404,8 +404,8 @@ def build(args):
         bin_res = 10m
         n_depth_bins = 9
         '''
-        n_depth_bins = 9 # TODO - get from args
-        depth_bin_res = 10 # TODO - get from args
+        n_depth_bins = args.num_depth_bins
+        depth_bin_res = args.depth_bin_res
 
     model = DETR(
         backbone,
@@ -413,7 +413,7 @@ def build(args):
         num_classes=num_classes,
         num_queries=args.num_queries,
         aux_loss=args.aux_loss,
-        multi_bin = ~args.depth_regression,
+        multi_bin = not args.depth_regression,
         n_depth_bins = n_depth_bins
     )
     if args.masks:

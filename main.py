@@ -16,6 +16,8 @@ from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch
 from models import build_model
 
+import PIL.Image as Image
+from torchvision import transforms
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
@@ -33,7 +35,7 @@ def get_args_parser():
     # Model parameters
     parser.add_argument('--frozen_weights', type=str, default=None,
                         help="Path to the pretrained model. If set, only the mask head will be trained")
-    parser.add_argument('--depth_regression', action='store_false',
+    parser.add_argument('--depth_regression', action='store_true',
                         help="Add flag to regress depth directly else use multi bin approach")
 
     # * Backbone
@@ -65,6 +67,13 @@ def get_args_parser():
     parser.add_argument('--masks', action='store_true',
                         help="Train segmentation head if the flag is provided")
 
+    # Depth
+    # Args used for multi bin depth
+    parser.add_argument('--num_depth_bins', type=int , default = 9,
+                        help="Number of depth bins")
+    parser.add_argument('--depth_bin_res', type=int , default = 10,
+                        help="Width of each depth bin")
+
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
                         help="Disables auxiliary decoding losses (loss at each layer)")
@@ -89,7 +98,6 @@ def get_args_parser():
     parser.add_argument('--coco_path', type=str)
     parser.add_argument('--kitti_path', default='/srip-vol/datasets/KITTI3D/', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
-    # TODO - for depth??
     parser.add_argument('--remove_difficult', action='store_true')
 
     parser.add_argument('--output_dir', default='output_logs_local',
@@ -104,8 +112,12 @@ def get_args_parser():
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true')
+    parser.add_argument('--test', action='store_true')
     parser.add_argument('--num_workers', default=2, type=int)
 
+    # arguments for testing detr
+    parser.add_argument('--test_image', default = None, type = str, help = 'Path to image for testing')
+    
     # distributed training parameters
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
@@ -130,8 +142,25 @@ def main(args):
     np.random.seed(seed)
     random.seed(seed)
 
+    # # TODO - Test code changes here! , Remove this
+    # args.test = True
+    # args.depth_regression = True # Temp changes
+
     model, criterion, postprocessors = build_model(args)
     model.to(device)
+
+    # if args.test:
+    #     # Test code - Work in progress
+    #     checkpoint = torch.load('output_logs_KITTI_2d_depth_July1/checkpoint.pth') # args.resume
+    #     model.load_state_dict(checkpoint['model'], strict = False)
+    #     args.test_image = '/srip-vol/datasets/KITTI3D/testing/image_2/000000.png' #args.test_image
+    #     if args.test_image is None:
+    #         return
+    #     img = Image.open(args.test_image)
+    #     img = transforms.ToTensor()(img).unsqueeze_(0)
+    #     img = img.to(args.device)
+    #     output = model(img)
+    #     return
 
     model_without_ddp = model
     if args.distributed:
@@ -195,7 +224,6 @@ def main(args):
         keys_to_delete = []
         for key in checkpoint["model"]:
             if 'box_embed' in key:
-                print(key)
                 keys_to_delete.append(key)
 
         for key in keys_to_delete:

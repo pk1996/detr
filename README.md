@@ -1,6 +1,14 @@
-Updates =>
-1. Added support for KITTI 2d object detection training.
-2. To train on KITTI over a trained DeTR model - 
+Updates
+
+1. convert KITTI data to coco format. (using - https://github.com/obss/sahi)
+2. Use kittidepth.py to extract depth inforamtion in json file.
+3. Args for running main.py
+  1. lr_backbone = 0 to freeze backbone
+  2. depth_regression set to directly regress depth. Default uses multi bin approach
+  3. dataset_file = 'kitti_coco'
+  4. num_depth_bins, depth_bin_res for multi bin approach
+
+
 ```
 # Download pretrained DeTR from model zoo and save in folder pretrained
 

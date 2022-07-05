@@ -24,7 +24,7 @@ def crop(image, target, region):
 
     # Change to train on KITTI
     # fields = ["labels", "area", "iscrowd"]
-    fields = ["labels"]# "area", "iscrowd"]
+    fields = ["labels"]
 
     if "boxes" in target:
         boxes = target["boxes"]
