@@ -33,3 +33,8 @@ for i in tqdm(range(len(data['images']))):
 
     # Save in dict
     depth_data[i+1] = depth #torch.tensor(depth)
+
+    # Save depth data as json file
+    output_path = '/srip-vol/datasets/KITTI3D/coco/depth_%s.json' %(split)
+    with open(output_path, "w") as outfile:
+        json.dump(depth_data, outfile)
