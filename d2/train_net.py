@@ -19,6 +19,8 @@ import torch
 
 import detectron2.utils.comm as comm
 from d2.detr import DetrDatasetMapper, add_detr_config
+from d2.detr import kitti_detectron2, BEVNetDatasetMapper
+from detectron2.data import DatasetCatalog #MetadataCatalog
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog, build_detection_train_loader
@@ -48,7 +50,9 @@ class Trainer(DefaultTrainer):
     @classmethod
     def build_train_loader(cls, cfg):
         if "Detr" == cfg.MODEL.META_ARCHITECTURE:
-            mapper = DetrDatasetMapper(cfg, True)
+            # mapper = DetrDatasetMapper(cfg, True)
+            # elif "BEVNet" == cfg.MODEL.META_ARCHITECTURE:
+            mapper = BEVNetDatasetMapper(cfg, True)
         else:
             mapper = None
         return build_detection_train_loader(cfg, mapper=mapper)
@@ -111,6 +115,11 @@ def setup(args):
     add_detr_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
+
+    # LOAD DD3D backbone weights
+    cfg.MODEL.WEIGHTS = 'https://tri-ml-public.s3.amazonaws.com/github/dd3d/pretrained/depth_pretrained_dla34-y1urdmir-20210422_165446-model_final-remapped.pth'
+    # Set output dir
+    cfg.OUTPUT_DIR = './output_dd3d_iv_exp1'
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
@@ -118,6 +127,9 @@ def setup(args):
 
 def main(args):
     cfg = setup(args)
+
+    if cfg.DEPTH.PREDICT:
+        print('PREDICTING DEPTH ....')
 
     if args.eval_only:
         model = Trainer.build_model(cfg)
@@ -128,12 +140,17 @@ def main(args):
         return res
 
     trainer = Trainer(cfg)
+    print(args.resume)
     trainer.resume_or_load(resume=args.resume)
     return trainer.train()
 
 
 if __name__ == "__main__":
+    print('Train Script Initiated .......')
     args = default_argument_parser().parse_args()
+    # Lines added to avoid command line arguments, TEMP change
+    args.config_file = "d2/configs/detr_256_6_6_torchvision_depth.yaml"
+    args.num_gpus = 1
     print("Command Line Args:", args)
     launch(
         main,

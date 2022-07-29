@@ -32,3 +32,27 @@ def add_detr_config(cfg):
 
     cfg.SOLVER.OPTIMIZER = "ADAMW"
     cfg.SOLVER.BACKBONE_MULTIPLIER = 0.1
+
+    # DEPTH
+    cfg.DEPTH = CN()
+    cfg.DEPTH.PREDICT = True
+    cfg.DEPTH.NUM_BINS = 9
+    cfg.DEPTH.BIN_RES = 10
+
+    cfg.FE = CN()
+    cfg.FE.BUILDER = "build_fcos_dla_fpn_backbone_p67"
+
+    # BACKBONE
+    cfg.FE.BACKBONE = CN()
+    cfg.FE.BACKBONE.NAME = "DLA-34"
+    cfg.FE.BACKBONE.OUT_FEATURES = ["level3", "level4", "level5"]
+    cfg.FE.BACKBONE.NORM = "BN"
+
+    # FPN
+    cfg.FE.FPN = CN()
+    cfg.FE.FPN.IN_FEATURES = cfg.FE.BACKBONE.OUT_FEATURES
+    # By default ('None'), returns all features.
+    cfg.FE.FPN.OUT_FEATURES = None
+    cfg.FE.FPN.OUT_CHANNELS = 256
+    cfg.FE.FPN.NORM = "BN"
+    cfg.FE.FPN.FUSE_TYPE = "sum"

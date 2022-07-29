@@ -20,7 +20,7 @@ from .transformer import build_transformer
 
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbone, transformer, num_classes, num_queries, aux_loss=False):
+    def __init__(self, backbone, transformer, num_classes, num_queries, aux_loss=False, depth_params = None):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -40,6 +40,13 @@ class DETR(nn.Module):
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
+        self.to_predict_depth = False
+        if depth_params:
+            # Set up depth head
+            self.to_predict_depth = True
+            self.n_depth_bins = depth_params['n_depth_bins']
+            self.depth_delta =  nn.Linear(hidden_dim, 1) # regression for finding delta
+            self.depth_bin = nn.Linear(hidden_dim, self.n_depth_bins)
 
     def forward(self, samples: NestedTensor):
         """ The forward expects a NestedTensor, which consists of:
@@ -67,9 +74,27 @@ class DETR(nn.Module):
         outputs_class = self.class_embed(hs)
         outputs_coord = self.bbox_embed(hs).sigmoid()
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
+
+        if self.to_predict_depth:
+            # Perform depth prediction
+            output_depth_bin = F.softmax(self.depth_bin(hs), dim = 3)
+            output_depth_delta = torch.tanh(self.depth_delta(hs))/2
+            out['pred_depth_bin'] = output_depth_bin[-1]
+            out['pred_depth_delta'] = output_depth_delta[-1]
+
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+            if self.to_predict_depth:
+                out['aux_outputs'] = self._set_depth_aux_loss(out['aux_outputs'], output_depth_bin, output_depth_delta)
+                
         return out
+
+    @torch.jit.unused 
+    def _set_depth_aux_loss(self, out, output_depth_bin, output_depth_delta):
+        for i , (a,b) in enumerate(zip(output_depth_bin[:-1],output_depth_delta[:-1])):
+            out[i].update({'pred_depth_bin' : a, 'pred_depth_delta' : b})
+        return out
+
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord):
@@ -86,7 +111,7 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
-    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses):
+    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses, depth_params = None):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -104,6 +129,36 @@ class SetCriterion(nn.Module):
         empty_weight = torch.ones(self.num_classes + 1)
         empty_weight[-1] = self.eos_coef
         self.register_buffer('empty_weight', empty_weight)
+        self.to_predict_depth = False
+        if depth_params:
+            # Set up depth head
+            self.to_predict_depth = True
+            self.n_depth_bins = depth_params['n_depth_bins']
+            self.depth_bin_res = depth_params['depth_bin_res']
+
+    def loss_depth(self, outputs, targets, indices, num_boxes):
+        """Classification loss (NLL)
+        targets dicts must contain the key "depth" containing a tensor of dim [nb_target_boxes]
+        """
+        assert 'pred_depth_bin' in outputs
+        assert 'pred_depth_delta' in outputs
+        idx = self._get_src_permutation_idx(indices)
+
+        src_depth_bin = outputs['pred_depth_bin'][idx].squeeze()
+        src_depth_delta = outputs['pred_depth_delta'][idx].squeeze()
+
+        target_depth = torch.cat([t['depth'][i] for t, (_, i) in zip(targets, indices)])
+        target_depth_bin_cls = target_depth/self.depth_bin_res
+        target_depth_bin_cls = target_depth_bin_cls.int()
+        target_depth_delta = target_depth - target_depth_bin_cls*self.depth_bin_res - self.depth_bin_res/2
+        target_depth_bin = torch.zeros_like(src_depth_bin)
+        target_depth_bin[torch.arange(src_depth_bin.size()[0]),target_depth_bin_cls.long()] = 1
+
+        loss_depth_reg = F.mse_loss(src_depth_delta, target_depth_delta)
+        loss_depth_class = F.cross_entropy(src_depth_bin, target_depth_bin)
+        loss = loss_depth_reg/2 + loss_depth_class/2
+        losses = {'loss_depth' : loss}
+        return losses
 
     def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
         """Classification loss (NLL)
@@ -209,6 +264,8 @@ class SetCriterion(nn.Module):
             'boxes': self.loss_boxes,
             'masks': self.loss_masks
         }
+        if self.to_predict_depth:
+            loss_map.update({'depth': self.loss_depth})
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
 

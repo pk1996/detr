@@ -25,6 +25,7 @@ from util.box_ops import box_cxcywh_to_xyxy, box_xyxy_to_cxcywh
 from util.misc import NestedTensor
 from datasets.coco import convert_coco_poly_to_mask
 
+from backbone import build_feature_extractor
 __all__ = ["Detr"]
 
 
@@ -33,7 +34,8 @@ class MaskedBackbone(nn.Module):
 
     def __init__(self, cfg):
         super().__init__()
-        self.backbone = build_backbone(cfg)
+        # self.backbone = build_backbone(cfg)
+        self.backbone = build_feature_extractor(cfg)
         backbone_shape = self.backbone.output_shape()
         self.feature_strides = [backbone_shape[f].stride for f in backbone_shape.keys()]
         self.num_channels = backbone_shape[list(backbone_shape.keys())[-1]].channels
@@ -77,7 +79,7 @@ class Detr(nn.Module):
 
         self.device = torch.device(cfg.MODEL.DEVICE)
 
-        self.num_classes = cfg.MODEL.DETR.NUM_CLASSES
+        self.num_classes = cfg.MODEL.DETR.NUM_CLASSES # TODO
         self.mask_on = cfg.MODEL.MASK_ON
         hidden_dim = cfg.MODEL.DETR.HIDDEN_DIM
         num_queries = cfg.MODEL.DETR.NUM_OBJECT_QUERIES
@@ -96,6 +98,8 @@ class Detr(nn.Module):
         no_object_weight = cfg.MODEL.DETR.NO_OBJECT_WEIGHT
 
         N_steps = hidden_dim // 2
+        # TODO - Changes to be done to integrate DD3D backbone
+        print(cfg.MODEL.BACKBONE)
         d2_backbone = MaskedBackbone(cfg)
         backbone = Joiner(d2_backbone, PositionEmbeddingSine(N_steps, normalize=True))
         backbone.num_channels = d2_backbone.num_channels
@@ -111,8 +115,16 @@ class Detr(nn.Module):
             return_intermediate_dec=deep_supervision,
         )
 
+        # Pass all depth related setting via depth_params
+        depth_params = {}
+        self.to_predict_depth = cfg.DEPTH.PREDICT
+        if cfg.DEPTH.PREDICT:
+            depth_params['n_depth_bins'] = cfg.DEPTH.NUM_BINS
+            depth_params['depth_bin_res'] = cfg.DEPTH.BIN_RES
+
         self.detr = DETR(
-            backbone, transformer, num_classes=self.num_classes, num_queries=num_queries, aux_loss=deep_supervision
+            backbone, transformer, num_classes=self.num_classes, num_queries=num_queries, aux_loss=deep_supervision,
+            depth_params = depth_params
         )
         if self.mask_on:
             frozen_weights = cfg.MODEL.DETR.FROZEN_WEIGHTS
@@ -137,16 +149,20 @@ class Detr(nn.Module):
         matcher = HungarianMatcher(cost_class=1, cost_bbox=l1_weight, cost_giou=giou_weight)
         weight_dict = {"loss_ce": 1, "loss_bbox": l1_weight}
         weight_dict["loss_giou"] = giou_weight
+        if cfg.DEPTH.PREDICT:
+            weight_dict["loss_depth"] = 1
         if deep_supervision:
             aux_weight_dict = {}
             for i in range(dec_layers - 1):
                 aux_weight_dict.update({k + f"_{i}": v for k, v in weight_dict.items()})
             weight_dict.update(aux_weight_dict)
         losses = ["labels", "boxes", "cardinality"]
+        if cfg.DEPTH.PREDICT:
+            losses.append("depth")
         if self.mask_on:
             losses += ["masks"]
         self.criterion = SetCriterion(
-            self.num_classes, matcher=matcher, weight_dict=weight_dict, eos_coef=no_object_weight, losses=losses,
+            self.num_classes, matcher=matcher, weight_dict=weight_dict, eos_coef=no_object_weight, losses=losses, depth_params = depth_params,
         )
         self.criterion.to(self.device)
 
@@ -178,7 +194,10 @@ class Detr(nn.Module):
 
         if self.training:
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
-
+            if self.to_predict_depth:
+                # Append Depth Information
+                gt_depth = [x["depth"].to(self.device) for x in batched_inputs]
+                gt_instances = [[a,b] for a,b in zip(gt_instances, gt_depth)]
             targets = self.prepare_targets(gt_instances)
             loss_dict = self.criterion(output, targets)
             weight_dict = self.criterion.weight_dict
@@ -187,6 +206,7 @@ class Detr(nn.Module):
                     loss_dict[k] *= weight_dict[k]
             return loss_dict
         else:
+            # TODO - Need to see what needs to be done for depth eval
             box_cls = output["pred_logits"]
             box_pred = output["pred_boxes"]
             mask_pred = output["pred_masks"] if self.mask_on else None
@@ -200,14 +220,20 @@ class Detr(nn.Module):
             return processed_results
 
     def prepare_targets(self, targets):
+        # TODO - add depth
+        if self.to_predict_depth:
+            targets, target_depth = zip(*targets)
         new_targets = []
-        for targets_per_image in targets:
+        for i, targets_per_image in enumerate(targets):
             h, w = targets_per_image.image_size
             image_size_xyxy = torch.as_tensor([w, h, w, h], dtype=torch.float, device=self.device)
             gt_classes = targets_per_image.gt_classes
             gt_boxes = targets_per_image.gt_boxes.tensor / image_size_xyxy
             gt_boxes = box_xyxy_to_cxcywh(gt_boxes)
             new_targets.append({"labels": gt_classes, "boxes": gt_boxes})
+            if self.to_predict_depth:
+                gt_depth = target_depth[i]
+                new_targets[-1].update({'depth': gt_depth})
             if self.mask_on and hasattr(targets_per_image, 'gt_masks'):
                 gt_masks = targets_per_image.gt_masks
                 gt_masks = convert_coco_poly_to_mask(gt_masks.polygons, h, w)
@@ -257,5 +283,7 @@ class Detr(nn.Module):
         Normalize, pad and batch the input images.
         """
         images = [self.normalizer(x["image"].to(self.device)) for x in batched_inputs]
-        images = ImageList.from_tensors(images)
+        # add size_divisibility of 32 to ensure the images have the right dim for 
+        # it to pass through the FPN
+        images = ImageList.from_tensors(images, 32)
         return images
